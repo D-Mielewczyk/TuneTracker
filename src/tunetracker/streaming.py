@@ -20,69 +20,51 @@ from pyspark.sql.functions import col, window
 from pyspark.sql.types import StringType, StructType, TimestampType
 
 
+def create_spark_session():
+    """Create SparkSession optimized for Docker environment."""
+    logger.info("Creating SparkSession for Docker environment...")
+
+    try:
+        # Create SparkSession with Docker-optimized settings
+        spark = (
+            SparkSession.builder.master("local[*]")
+            .appName("TuneTrackerStreaming")
+            .config("spark.driver.host", "0.0.0.0")
+            .config("spark.driver.bindAddress", "0.0.0.0")
+            .config("spark.sql.warehouse.dir", "/app/spark-warehouse")
+            .config("spark.sql.streaming.checkpointLocation", "/app/checkpoint")
+            .config("spark.sql.adaptive.enabled", "false")
+            .config("spark.sql.adaptive.coalescePartitions.enabled", "false")
+            .config("spark.sql.adaptive.skewJoin.enabled", "false")
+            .config("spark.sql.adaptive.localShuffleReader.enabled", "false")
+            .getOrCreate()
+        )
+
+        logger.success("✅ SparkSession created successfully in Docker!")
+        return spark
+    except Exception as e:
+        logger.error(f"❌ Failed to create SparkSession: {e}")
+        return None
+
+
 def test_spark_session():
     """Test if we can create a minimal SparkSession."""
     logger.info("Testing minimal SparkSession creation...")
     try:
-        # Try a completely different approach - use PySpark's built-in Spark only
-        logger.info("Trying with PySpark's built-in Spark only...")
-
-        # Remove all external Spark environment variables
-        for key in [
-            "SPARK_HOME",
-            "SPARK_LOCAL_IP",
-            "SPARK_LOCAL_HOSTNAME",
-            "SPARK_DRIVER_OPTS",
-            "SPARK_EXECUTOR_OPTS",
-        ]:
-            if key in os.environ:
-                del os.environ[key]
-                logger.info(f"Removed {key}")
-
-        # Set only essential environment variables
-        os.environ["JAVA_HOME"] = "C:\\Program Files\\Java\\jdk-11"
-
-        # Try with explicit Java options
-        import subprocess
-        import sys
-
-        # Check if we can find Java
-        try:
-            result = subprocess.run(
-                ["java", "-version"], capture_output=True, text=True, timeout=10
-            )
-            logger.info(f"Java version check: {result.returncode}")
-        except Exception as e:
-            logger.error(f"Java check failed: {e}")
-
-        # Try using a different approach - import SparkContext first
-        logger.info("Trying with SparkContext initialization...")
-        from pyspark import SparkContext, SparkConf
-
-        # Create a minimal SparkConf
-        conf = SparkConf()
-        conf.setMaster("local[1]")
-        conf.setAppName("TestSpark")
-        conf.set("spark.driver.host", "127.0.0.1")
-        conf.set("spark.driver.bindAddress", "127.0.0.1")
-
-        # Try to create SparkContext first
-        logger.info("Creating SparkContext...")
-        sc = SparkContext(conf=conf)
-        logger.info("SparkContext created successfully!")
-
-        # Now create SparkSession from the SparkContext
-        logger.info("Creating SparkSession from SparkContext...")
-        spark = SparkSession(sc)
+        # Create a simple SparkSession
+        spark = (
+            SparkSession.builder.master("local[1]")
+            .appName("TestSpark")
+            .config("spark.driver.host", "0.0.0.0")
+            .config("spark.driver.bindAddress", "0.0.0.0")
+            .getOrCreate()
+        )
 
         logger.success("✅ Minimal SparkSession created successfully!")
         spark.stop()
         return True
     except Exception as e:
         logger.error(f"❌ Failed to create minimal SparkSession: {e}")
-        logger.warning(
-            "⚠️ SparkSession creation failed. Using fallback approach with pandas..."
-        )
         return False
 
 
@@ -120,64 +102,29 @@ def run_streaming(
         logger.error("Cannot proceed - SparkSession creation failed")
         return
 
-    # Debug environment variables
-    logger.info("=== Environment Debug ===")
-    logger.info(f"JAVA_HOME: {os.environ.get('JAVA_HOME', 'NOT SET')}")
-    logger.info(f"SPARK_HOME: {os.environ.get('SPARK_HOME', 'NOT SET')}")
-    logger.info(f"Current working directory: {os.getcwd()}")
-    logger.info(f"Python executable: {sys.executable}")
-    logger.info("=== End Environment Debug ===")
-
-    # Set additional environment variables for Windows
-    logger.info("Setting Windows-specific environment variables...")
-    os.environ["HADOOP_HOME"] = os.environ.get("HADOOP_HOME", "C:\\spark")
-    os.environ["SPARK_LOCAL_DIRS"] = os.path.abspath("./spark-temp")
-    os.environ["SPARK_WORKER_DIR"] = os.path.abspath("./spark-worker")
-
-    # Create temp directories
-    os.makedirs("./spark-temp", exist_ok=True)
-    os.makedirs("./spark-worker", exist_ok=True)
-    logger.info("Environment variables and temp directories set")
-
     # Create checkpoint directory if it doesn't exist
     logger.info(f"Creating checkpoint directory: {checkpoint_location}")
     os.makedirs(checkpoint_location, exist_ok=True)
     logger.info("Checkpoint directory created/verified")
 
-    # Create spark-warehouse directory for Windows
+    # Create spark-warehouse directory
     logger.info("Creating spark-warehouse directory...")
-    os.makedirs("./spark-warehouse", exist_ok=True)
+    os.makedirs("/app/spark-warehouse", exist_ok=True)
     logger.info("Spark-warehouse directory created/verified")
 
-    # Initialize Spark with Windows-specific configurations
-    logger.info("Before SparkSession creation...")
-    logger.info(f"Checkpoint location: {checkpoint_location}")
-
     try:
-        logger.info("Creating SparkSession with Windows-specific configs...")
-
-        # Try to import and check PySpark version
-        import pyspark
-
-        logger.info(f"PySpark version: {pyspark.__version__}")
+        logger.info("Creating SparkSession...")
 
         spark = (
             SparkSession.builder.master("local[*]")
             .appName("TuneTrackerStreaming")
             .config("spark.sql.streaming.checkpointLocation", checkpoint_location)
-            .config("spark.hadoop.dfs.permissions", "false")
-            .config("spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version", "2")
-            .config("spark.sql.adaptive.enabled", "false")
-            # Windows-specific configurations
-            .config("spark.driver.host", "localhost")
-            .config("spark.driver.bindAddress", "localhost")
-            .config("spark.sql.warehouse.dir", "./spark-warehouse")
-            .config("spark.sql.adaptive.coalescePartitions.enabled", "false")
-            .config("spark.sql.adaptive.skewJoin.enabled", "false")
-            .config("spark.sql.adaptive.localShuffleReader.enabled", "false")
+            .config("spark.driver.host", "0.0.0.0")
+            .config("spark.driver.bindAddress", "0.0.0.0")
+            .config("spark.sql.warehouse.dir", "/app/spark-warehouse")
             .getOrCreate()
         )
-        logger.info("After SparkSession creation...")
+        logger.info("SparkSession created successfully")
 
     except Exception as e:
         logger.error(f"Error creating SparkSession: {e}")
@@ -236,7 +183,8 @@ def run_streaming(
     logger.info(f"Processing {len(messages)} messages...")
 
     # Try Spark processing first, fallback to pandas if it fails
-    if test_spark_session():
+    spark = create_spark_session()
+    if spark:
         # Process with Spark
         logger.info("Using Spark processing...")
 

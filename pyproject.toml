@@ -20,6 +20,7 @@ dependencies = [
 
 
 [tool.poetry]
+packages = [{ include = "tunetracker", from = "src" }]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
