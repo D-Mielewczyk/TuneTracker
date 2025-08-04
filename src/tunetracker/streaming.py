@@ -3,17 +3,14 @@ TuneTracker Streaming - Simple streaming with KafkaConsumer and PySpark
 """
 
 import json
+import os
 import signal
 import sys
 import time
-import os
-import csv
-from datetime import datetime
-from typing import Optional
-from collections import defaultdict
+import traceback
 
 from kafka import KafkaConsumer
-from kafka.errors import KafkaError, NoBrokersAvailable
+from kafka.errors import NoBrokersAvailable
 from loguru import logger
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, window
@@ -68,6 +65,45 @@ def test_spark_session():
         return False
 
 
+def process_messages_batch(messages, spark, output_path, output_format):
+    """Process a batch of messages and save results."""
+    # Convert messages to Spark DataFrame
+    schema = (
+        StructType()
+        .add("user_id", StringType())
+        .add("track_id", StringType())
+        .add("genre", StringType())
+        .add("timestamp", StringType())
+    )
+
+    # Create DataFrame from collected messages
+    df = spark.createDataFrame(messages, schema=schema)
+    df = df.withColumn("timestamp", col("timestamp").cast(TimestampType()))
+
+    # Aggregate by window and genre
+    agg_df = df.groupBy(window(col("timestamp"), "1 minute"), col("genre")).count()
+
+    # Write results
+    if output_format == "csv":
+        # For CSV, we need to flatten the window struct
+        agg_df = agg_df.select(
+            col("window.start").alias("window_start"),
+            col("window.end").alias("window_end"),
+            col("genre"),
+            col("count"),
+        )
+        agg_df.write.format("csv").option("header", True).mode("append").save(
+            output_path
+        )
+    else:
+        # For Parquet (columnar format), we can keep the window struct
+        agg_df.write.format("parquet").mode("append").save(output_path)
+
+    logger.success(f"✅ Batch results written to {output_path}")
+    logger.info("Sample results:")
+    agg_df.show()
+
+
 def shutdown_hook(spark_session: SparkSession):
     """Graceful shutdown handler for Spark session."""
 
@@ -77,6 +113,156 @@ def shutdown_hook(spark_session: SparkSession):
         sys.exit(0)
 
     return handler
+
+
+def run_streaming_simple(
+    bootstrap_servers: str,
+    input_topic: str,
+    output_path: str,
+    output_format: str = "csv",
+    checkpoint_location: str = "./checkpoint",
+) -> None:
+    """Run streaming without signal handling (for threaded execution)."""
+
+    logger.info(f"Starting streaming job: {input_topic} -> {output_path}")
+
+    # Test Spark session
+    test_spark_session()
+
+    # Create directories
+    os.makedirs(checkpoint_location, exist_ok=True)
+    logger.info("Checkpoint directory created/verified")
+
+    os.makedirs("./spark-warehouse", exist_ok=True)
+    logger.info("Spark-warehouse directory created/verified")
+
+    # Create SparkSession
+    logger.info("Creating SparkSession...")
+    spark = create_spark_session()
+    if not spark:
+        logger.error("Failed to create SparkSession")
+        return
+
+    logger.info("SparkSession created successfully")
+
+    # Initialize Kafka consumer
+    try:
+        consumer = KafkaConsumer(
+            input_topic,
+            bootstrap_servers=bootstrap_servers,
+            auto_offset_reset="earliest",
+            enable_auto_commit=False,
+            value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+            consumer_timeout_ms=1000,  # 1 second timeout
+        )
+        logger.success("✅ KafkaConsumer created successfully")
+    except NoBrokersAvailable:
+        logger.error("❌ No Kafka brokers available. Is Kafka running?")
+        logger.warning("Try starting Kafka with: docker-compose up -d")
+        return
+    except Exception as e:
+        logger.error(f"❌ Error creating KafkaConsumer: {e}")
+        return
+
+    # Collect messages from Kafka continuously
+    messages = []
+    logger.info("Collecting messages from Kafka...")
+    batch_count = 0
+    last_save_time = time.time()
+    save_interval = 60  # Save every 60 seconds
+
+    start_time = time.time()
+    duration = 120  # Match the demo duration
+
+    try:
+        while time.time() - start_time < duration:
+            try:
+                # Use a shorter timeout to check for new messages
+                message = next(consumer, None)
+                if message is None:
+                    # No message available, continue the loop
+                    time.sleep(0.1)
+                    continue
+
+                messages.append(message.value)
+                logger.info(f"Received message: {message.value}")
+
+                current_time = time.time()
+
+                # Save every 60 seconds or when we have enough messages
+                if (current_time - last_save_time >= save_interval and messages) or len(
+                    messages
+                ) >= 10:
+                    batch_count += 1
+                    logger.info(
+                        f"Processing batch {batch_count} with {len(messages)} messages..."
+                    )
+
+                    # Process current batch
+                    process_messages_batch(messages, spark, output_path, output_format)
+
+                    # Clear messages for next batch
+                    messages = []
+                    last_save_time = current_time
+
+            except StopIteration:
+                # No more messages available, continue the loop
+                time.sleep(0.1)
+                continue
+
+    except Exception as e:
+        logger.error(f"Error reading from Kafka: {e}")
+        consumer.close()
+        return
+
+    consumer.close()
+
+    # Process any remaining messages at the end
+    if messages:
+        batch_count += 1
+        logger.info(
+            f"Processing final batch {batch_count} with {len(messages)} messages..."
+        )
+        process_messages_batch(messages, spark, output_path, output_format)
+    elif batch_count == 0:
+        logger.warning("No messages received from Kafka")
+        return
+
+    logger.info(f"Demo completed! Processed {batch_count} batches total.")
+
+    # Consolidate Parquet files before ending
+    if output_format == "parquet":
+        logger.info("Consolidating Parquet files...")
+        try:
+            # Read all parquet files and repartition to consolidate
+            consolidated_df = spark.read.parquet(output_path)
+
+            # Count total records for logging
+            total_records = consolidated_df.count()
+            logger.info(f"Total records to consolidate: {total_records}")
+
+            # Repartition to create larger files (aim for ~1GB files)
+            # Assuming average record size of ~200 bytes, target ~5M records per file
+            target_partitions = max(1, total_records // 5000000)
+            consolidated_df = consolidated_df.repartition(target_partitions)
+
+            # Write consolidated files
+            consolidated_df.write.format("parquet").mode("overwrite").save(
+                f"{output_path}_consolidated"
+            )
+
+            # Count final files
+            final_files = spark.read.parquet(
+                f"{output_path}_consolidated"
+            ).rdd.getNumPartitions()
+            logger.success(
+                f"✅ Consolidated {total_records} records into {final_files} files"
+            )
+
+        except Exception as e:
+            logger.warning(f"Consolidation failed: {e}")
+
+    spark.stop()
 
 
 def run_streaming(
@@ -92,7 +278,7 @@ def run_streaming(
         bootstrap_servers: Kafka bootstrap servers
         input_topic: Kafka input topic
         output_path: Output path for results
-        output_format: Output format (csv or delta)
+        output_format: Output format (csv or parquet)
         checkpoint_location: Checkpoint location for Spark streaming
     """
     logger.info(f"Starting streaming job: {input_topic} -> {output_path}")
@@ -129,7 +315,6 @@ def run_streaming(
     except Exception as e:
         logger.error(f"Error creating SparkSession: {e}")
         logger.error(f"Exception type: {type(e).__name__}")
-        import traceback
 
         logger.error(f"Full traceback: {traceback.format_exc()}")
         return
@@ -157,9 +342,10 @@ def run_streaming(
         logger.error(f"❌ Error creating KafkaConsumer: {e}")
         return
 
-    # Collect messages from Kafka
+    # Collect messages from Kafka continuously
     messages = []
     logger.info("Collecting messages from Kafka...")
+    batch_count = 0
 
     try:
         for message in consumer:
@@ -168,7 +354,18 @@ def run_streaming(
 
             # Process in batches of 10 messages
             if len(messages) >= 10:
-                break
+                batch_count += 1
+                logger.info(
+                    f"Processing batch {batch_count} with {len(messages)} messages..."
+                )
+
+                # Process current batch
+                process_messages_batch(messages, spark, output_path, output_format)
+
+                # Clear messages for next batch
+                messages = []
+
+                # Continue collecting for more batches
     except Exception as e:
         logger.error(f"Error reading from Kafka: {e}")
         consumer.close()
@@ -176,63 +373,12 @@ def run_streaming(
 
     consumer.close()
 
-    if not messages:
+    # Process any remaining messages
+    if messages:
+        logger.info(f"Processing final batch with {len(messages)} messages...")
+        process_messages_batch(messages, spark, output_path, output_format)
+    elif batch_count == 0:
         logger.warning("No messages received from Kafka")
         return
 
-    logger.info(f"Processing {len(messages)} messages...")
-
-    # Try Spark processing first, fallback to pandas if it fails
-    spark = create_spark_session()
-    if spark:
-        # Process with Spark
-        logger.info("Using Spark processing...")
-
-        # Convert messages to Spark DataFrame
-        schema = (
-            StructType()
-            .add("user_id", StringType())
-            .add("track_id", StringType())
-            .add("genre", StringType())
-            .add("timestamp", StringType())
-        )
-
-        # Create DataFrame from collected messages
-        df = spark.createDataFrame(messages, schema=schema)
-        df = df.withColumn("timestamp", col("timestamp").cast(TimestampType()))
-
-        # Aggregate by window and genre
-        agg_df = df.groupBy(window(col("timestamp"), "1 minute"), col("genre")).count()
-
-        # Write results
-        if output_format == "csv":
-            agg_df.write.format("csv").option("header", True).save(output_path)
-        else:
-            agg_df.write.format("delta").save(output_path)
-
-        logger.success(f"✅ Results written to {output_path}")
-        logger.info("Sample results:")
-        agg_df.show()
-
-        spark.stop()
-    else:
-        # Fallback to pandas processing
-        logger.info("Using pandas fallback processing...")
-        import pandas as pd
-        from datetime import datetime
-
-        # Convert messages to pandas DataFrame
-        df = pd.DataFrame(messages)
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-
-        # Aggregate by genre (simplified without windowing)
-        genre_counts = df.groupby("genre").size().reset_index(name="count")
-
-        # Write results
-        output_file = os.path.join(output_path, "genre_counts.csv")
-        os.makedirs(output_path, exist_ok=True)
-        genre_counts.to_csv(output_file, index=False)
-
-        logger.success(f"✅ Results written to {output_file}")
-        logger.info("Sample results:")
-        logger.info(genre_counts.to_string())
+    spark.stop()

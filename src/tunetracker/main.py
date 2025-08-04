@@ -4,12 +4,14 @@ TuneTracker - Simple music streaming analytics with kafka-python and PySpark
 """
 
 import threading
+import time
 
 import typer
+from kafka import KafkaConsumer
 from loguru import logger
 
 from .producer import run_producer
-from .streaming import run_streaming
+from .streaming import run_streaming, run_streaming_simple
 
 app = typer.Typer()
 
@@ -36,7 +38,7 @@ def stream(
     ),
     input_topic: str = typer.Option("music-plays", help="Kafka input topic"),
     output_path: str = typer.Option("./output", help="Output path for results"),
-    output_format: str = typer.Option("csv", help="Output format: csv or delta"),
+    output_format: str = typer.Option("csv", help="Output format: csv or parquet"),
     checkpoint_location: str = typer.Option("./checkpoint", help="Checkpoint location"),
 ):
     """Run the PySpark streaming aggregation job."""
@@ -60,6 +62,31 @@ def demo(
     """Run a complete demo: produce events and stream them."""
     logger.info(f"Starting TuneTracker demo for {duration} seconds")
 
+    # Wait for Kafka to be ready
+    logger.info("Waiting for Kafka to be ready...")
+
+    max_retries = 30
+    retry_count = 0
+
+    while retry_count < max_retries:
+        try:
+            # Try to create a consumer to test connection
+            test_consumer = KafkaConsumer(
+                bootstrap_servers=bootstrap_servers,
+                consumer_timeout_ms=1000,
+            )
+            test_consumer.close()
+            logger.success("✅ Kafka is ready!")
+            break
+        except Exception as e:
+            retry_count += 1
+            logger.info(f"Exception: {e}. Waiting for Kafka... ({retry_count}/{max_retries})")
+            time.sleep(2)
+
+    if retry_count >= max_retries:
+        logger.error("❌ Kafka is not available after maximum retries")
+        return
+
     # Start producer in background thread
     def run_producer_thread():
         run_producer(
@@ -70,13 +97,15 @@ def demo(
             duration=duration,
         )
 
-    # Start streaming job in background thread
+    # Start streaming job in background thread (without signal handling)
     def run_streaming_thread():
-        run_streaming(
+        # Import here to avoid signal issues in threads
+
+        run_streaming_simple(
             bootstrap_servers=bootstrap_servers,
             input_topic=topic,
             output_path="./demo_output",
-            output_format="csv",
+            output_format="parquet",
             checkpoint_location="./demo_checkpoint",
         )
 

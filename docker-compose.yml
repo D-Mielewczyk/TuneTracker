@@ -90,14 +90,17 @@ services:
     volumes:
       - ./output:/app/output
       - ./checkpoint:/app/checkpoint
+      - ./demo_output:/app/demo_output
     command:
       [
         "poetry",
         "run",
         "tunetracker",
-        "stream",
+        "demo",
         "--bootstrap-servers",
         "kafka:29092",
+        "--duration",
+        "120",
       ]
 
 volumes:
