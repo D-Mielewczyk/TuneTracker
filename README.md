@@ -9,7 +9,7 @@ TuneTracker simulates a music streaming service that:
 - **Produces** random music play events (user_id, track_id, genre, timestamp)
 - **Streams** these events through Kafka
 - **Aggregates** play counts by genre in 1-minute windows using PySpark
-- **Outputs** results to CSV or Delta format
+- **Outputs** results to Parquet format
 
 ## 📁 Project Structure
 
@@ -71,7 +71,6 @@ poetry run tunetracker stream `
     --bootstrap-servers localhost:9092 `
     --input-topic music-plays `
     --output-path ./output `
-    --output-format csv `
     --checkpoint-location ./checkpoint
 ```
 
@@ -84,17 +83,43 @@ poetry run tunetracker demo `
     --duration 60
 ```
 
+#### 4. Consolidate Parquet Files
+
+```powershell
+poetry run tunetracker consolidate `
+    --output-path ./output `
+    --target-file-size-gb 1.0
+```
+
 ## 📊 Output
 
 The streaming job produces aggregated results showing play counts by genre in 1-minute windows:
 
-```csv
+```parquet
 window_start,window_end,genre,count
 2024-01-01 10:00:00,2024-01-01 10:01:00,pop,15
 2024-01-01 10:00:00,2024-01-01 10:01:00,rock,8
 2024-01-01 10:01:00,2024-01-01 10:02:00,pop,12
 2024-01-01 10:01:00,2024-01-01 10:02:00,jazz,3
 ```
+
+## 🔄 File Consolidation
+
+The system automatically consolidates parquet files at the end of streaming sessions to optimize storage and query performance:
+
+- **Intelligent Sizing**: Aims for ~1GB files by default (configurable)
+- **Existing File Consideration**: Consolidates both new and existing parquet files
+- **Backup Creation**: Creates timestamped backups before consolidation
+- **Size Verification**: Reports actual file sizes and partition counts
+- **Manual Consolidation**: Use the `consolidate` command for maintenance
+
+### Consolidation Features
+
+- **Automatic**: Runs before demo completion (always enabled)
+- **Manual**: Available via CLI for maintenance tasks
+- **Configurable**: Target file size can be adjusted
+- **Safe**: Creates backups before consolidation
+- **Informative**: Provides detailed logging of the process
 
 ## 🧪 Testing
 
@@ -108,9 +133,9 @@ poetry run pytest
 
 ### Components
 
-- **`main.py`**: CLI orchestration using Typer - provides commands for produce, stream, and demo
+- **`main.py`**: CLI orchestration using Typer - provides commands for produce, stream, demo, and consolidate
 - **`producer.py`**: Module containing Kafka producer logic using [kafka-python](https://github.com/dpkp/kafka-python)
-- **`streaming.py`**: Module containing PySpark Structured Streaming logic for aggregations
+- **`streaming.py`**: Module containing PySpark Structured Streaming logic for aggregations and file consolidation
 
 ### Data Flow
 

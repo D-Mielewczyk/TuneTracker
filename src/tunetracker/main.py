@@ -11,7 +11,7 @@ from kafka import KafkaConsumer
 from loguru import logger
 
 from .producer import run_producer
-from .streaming import run_streaming, run_streaming_simple
+from .streaming import run_streaming, run_streaming_simple, consolidate_parquet_files
 
 app = typer.Typer()
 
@@ -38,7 +38,6 @@ def stream(
     ),
     input_topic: str = typer.Option("music-plays", help="Kafka input topic"),
     output_path: str = typer.Option("./output", help="Output path for results"),
-    output_format: str = typer.Option("csv", help="Output format: csv or parquet"),
     checkpoint_location: str = typer.Option("./checkpoint", help="Checkpoint location"),
 ):
     """Run the PySpark streaming aggregation job."""
@@ -46,9 +45,32 @@ def stream(
         bootstrap_servers=bootstrap_servers,
         input_topic=input_topic,
         output_path=output_path,
-        output_format=output_format,
         checkpoint_location=checkpoint_location,
     )
+
+
+@app.command()
+def consolidate(
+    output_path: str = typer.Option(
+        "./output", help="Path to parquet files to consolidate"
+    ),
+    target_file_size_gb: float = typer.Option(1.0, help="Target file size in GB"),
+):
+    """Consolidate existing parquet files into larger files."""
+    from .streaming import create_spark_session
+
+    logger.info(f"Starting parquet consolidation for {output_path}")
+
+    # Create SparkSession
+    spark = create_spark_session()
+    if not spark:
+        logger.error("Failed to create SparkSession")
+        return
+
+    try:
+        consolidate_parquet_files(spark, output_path, target_file_size_gb)
+    finally:
+        spark.stop()
 
 
 @app.command()
@@ -80,7 +102,9 @@ def demo(
             break
         except Exception as e:
             retry_count += 1
-            logger.info(f"Exception: {e}. Waiting for Kafka... ({retry_count}/{max_retries})")
+            logger.info(
+                f"Exception: {e}. Waiting for Kafka... ({retry_count}/{max_retries})"
+            )
             time.sleep(2)
 
     if retry_count >= max_retries:
@@ -105,7 +129,6 @@ def demo(
             bootstrap_servers=bootstrap_servers,
             input_topic=topic,
             output_path="./demo_output",
-            output_format="parquet",
             checkpoint_location="./demo_checkpoint",
         )
 
@@ -119,7 +142,24 @@ def demo(
     try:
         producer_thread.join()
         streaming_thread.join()
+
+        # Consolidate parquet files before demo completion
+        logger.info("Starting parquet consolidation before demo completion...")
+        from .streaming import create_spark_session
+
+        spark = create_spark_session()
+        if spark:
+            try:
+                consolidate_parquet_files(
+                    spark, "./demo_output", target_file_size_gb=1.0
+                )
+            finally:
+                spark.stop()
+        else:
+            logger.error("Failed to create SparkSession for consolidation")
+
         logger.success("Demo completed!")
+
     except KeyboardInterrupt:
         logger.warning("Demo interrupted by user")
 

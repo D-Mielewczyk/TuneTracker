@@ -91,6 +91,7 @@ services:
       - ./output:/app/output
       - ./checkpoint:/app/checkpoint
       - ./demo_output:/app/demo_output
+      - ./spark-warehouse:/app/spark-warehouse
     command:
       [
         "poetry",
