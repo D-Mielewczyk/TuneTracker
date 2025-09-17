@@ -1,7 +1,3 @@
-"""
-TuneTracker Producer - Kafka producer for music play events
-"""
-
 import json
 import random
 import time

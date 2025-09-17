@@ -56,4 +56,4 @@ RUN mkdir -p /app/output /app/checkpoint /app/spark-warehouse /app/spark-temp
 EXPOSE 4040 7077
 
 # Set default command
-CMD ["poetry", "run", "tunetracker", "stream"] 
+CMD ["poetry", "run", "tunetracker", "stream"]

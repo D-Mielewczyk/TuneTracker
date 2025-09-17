@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""
-TuneTracker - Simple music streaming analytics with kafka-python and PySpark
-"""
-
 import threading
 import time
 
@@ -11,7 +6,7 @@ from kafka import KafkaConsumer
 from loguru import logger
 
 from .producer import run_producer
-from .streaming import run_streaming, run_streaming_simple, consolidate_parquet_files
+from .streaming import run_streaming, run_streaming_simple
 
 app = typer.Typer()
 
@@ -47,30 +42,6 @@ def stream(
         output_path=output_path,
         checkpoint_location=checkpoint_location,
     )
-
-
-@app.command()
-def consolidate(
-    output_path: str = typer.Option(
-        "./output", help="Path to parquet files to consolidate"
-    ),
-    target_file_size_gb: float = typer.Option(1.0, help="Target file size in GB"),
-):
-    """Consolidate existing parquet files into larger files."""
-    from .streaming import create_spark_session
-
-    logger.info(f"Starting parquet consolidation for {output_path}")
-
-    # Create SparkSession
-    spark = create_spark_session()
-    if not spark:
-        logger.error("Failed to create SparkSession")
-        return
-
-    try:
-        consolidate_parquet_files(spark, output_path, target_file_size_gb)
-    finally:
-        spark.stop()
 
 
 @app.command()
@@ -123,13 +94,12 @@ def demo(
 
     # Start streaming job in background thread (without signal handling)
     def run_streaming_thread():
-        # Import here to avoid signal issues in threads
-
         run_streaming_simple(
             bootstrap_servers=bootstrap_servers,
             input_topic=topic,
             output_path="./demo_output",
             checkpoint_location="./demo_checkpoint",
+            duration=duration,
         )
 
     # Run both in separate threads
@@ -142,21 +112,6 @@ def demo(
     try:
         producer_thread.join()
         streaming_thread.join()
-
-        # Consolidate parquet files before demo completion
-        logger.info("Starting parquet consolidation before demo completion...")
-        from .streaming import create_spark_session
-
-        spark = create_spark_session()
-        if spark:
-            try:
-                consolidate_parquet_files(
-                    spark, "./demo_output", target_file_size_gb=1.0
-                )
-            finally:
-                spark.stop()
-        else:
-            logger.error("Failed to create SparkSession for consolidation")
 
         logger.success("Demo completed!")
 

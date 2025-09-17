@@ -1,15 +1,22 @@
 # TuneTracker
 
-A simple real-time streaming analytics project for music play events, using [kafka-python](https://github.com/dpkp/kafka-python) and PySpark Structured Streaming.
+A simple real-time streaming analytics project for music play events, using [kafka-python](https://github.com/dpkp/kafka-python) and PySpark.
+
+## Authors
+
+| Name     | Surname    | Student Index |
+|----------|------------|---------------|
+| Dawid    | Mielewczyk | 189637        |
+| Wojciech | Szamocki   | 188909        |
 
 ## 🎯 What It Does
 
 TuneTracker simulates a music streaming service that:
 
-- **Produces** random music play events (user_id, track_id, genre, timestamp)
-- **Streams** these events through Kafka
-- **Aggregates** play counts by genre in 1-minute windows using PySpark
-- **Outputs** results to Parquet format
+- **Produces** random music play events (user_id, track_id, genre, timestamp)  
+- **Streams** these events through Kafka  
+- **Aggregates** play counts by genre in 1-minute windows using PySpark  
+- **Outputs** results to a single CSV file (`results.csv`)  
 
 ## 📁 Project Structure
 
@@ -22,132 +29,98 @@ TuneTracker/
 │       ├── producer.py           # Kafka producer logic
 │       └── streaming.py          # PySpark streaming logic
 ├── tests/                        # Unit and integration tests
-├── pyproject.toml               # Poetry configuration
-└── README.md                    # This file
-```
+├── pyproject.toml                # Poetry configuration
+└── README.md                     # This file
+````
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
 - **Python 3.11+** (managed by Poetry)
-- **Apache Kafka** running locally (for testing)
-- **Java 8+** (required for PySpark)
+- **Apache Kafka** running locally or via Docker Compose
+- **Java 11+** (required for PySpark)
 
 ### Installation
 
 1. **Clone and install dependencies:**
-  
-   ```powershell
+
+   ```bash
    git clone <repository-url>
    cd TuneTracker
    poetry install
    ```
 
-2. **Start Kafka locally:**
+2. **Start Kafka locally (via Docker Compose):**
 
-   ```powershell
-   # Download and start Kafka
-   # Create topic: music-plays
-   kafka-topics --create --topic music-plays --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
+   ```bash
+   docker-compose up -d
    ```
+
+   This will start **Zookeeper + Kafka + Spark**.
 
 ### Usage
 
 #### 1. Produce Music Events
 
-```powershell
-poetry run tunetracker produce `
-    --bootstrap-servers localhost:9092 `
-    --topic music-plays `
-    --rate 2 `
+```bash
+poetry run tunetracker produce \
+    --bootstrap-servers localhost:9092 \
+    --topic music-plays \
+    --rate 2 \
     --total 100
 ```
 
 #### 2. Stream and Aggregate
 
-```powershell
-poetry run tunetracker stream `
-    --bootstrap-servers localhost:9092 `
-    --input-topic music-plays `
-    --output-path ./output `
+```bash
+poetry run tunetracker stream \
+    --bootstrap-servers localhost:9092 \
+    --input-topic music-plays \
+    --output-path ./output \
     --checkpoint-location ./checkpoint
 ```
 
-#### 3. Run Complete Demo
+#### 3. Run Complete Demo (producer + streaming together)
 
-```powershell
-poetry run tunetracker demo `
-    --bootstrap-servers localhost:9092 `
-    --topic music-plays `
+```bash
+poetry run tunetracker demo \
+    --bootstrap-servers localhost:9092 \
+    --topic music-plays \
     --duration 60
-```
-
-#### 4. Consolidate Parquet Files
-
-```powershell
-poetry run tunetracker consolidate `
-    --output-path ./output `
-    --target-file-size-gb 1.0
 ```
 
 ## 📊 Output
 
-The streaming job produces aggregated results showing play counts by genre in 1-minute windows:
+The streaming job produces aggregated results showing play counts by genre in 1-minute windows.
+They are written into a single **CSV file** inside your chosen `--output-path` (default: `./demo_output/results.csv`):
 
-```parquet
+```csv
 window_start,window_end,genre,count
-2024-01-01 10:00:00,2024-01-01 10:01:00,pop,15
-2024-01-01 10:00:00,2024-01-01 10:01:00,rock,8
-2024-01-01 10:01:00,2024-01-01 10:02:00,pop,12
-2024-01-01 10:01:00,2024-01-01 10:02:00,jazz,3
+2025-09-07 21:00:00,2025-09-07 21:01:00,pop,15
+2025-09-07 21:00:00,2025-09-07 21:01:00,rock,8
+2025-09-07 21:01:00,2025-09-07 21:02:00,jazz,3
 ```
 
-## 🔄 File Consolidation
-
-The system automatically consolidates parquet files at the end of streaming sessions to optimize storage and query performance:
-
-- **Intelligent Sizing**: Aims for ~1GB files by default (configurable)
-- **Existing File Consideration**: Consolidates both new and existing parquet files
-- **Backup Creation**: Creates timestamped backups before consolidation
-- **Size Verification**: Reports actual file sizes and partition counts
-- **Manual Consolidation**: Use the `consolidate` command for maintenance
-
-### Consolidation Features
-
-- **Automatic**: Runs before demo completion (always enabled)
-- **Manual**: Available via CLI for maintenance tasks
-- **Configurable**: Target file size can be adjusted
-- **Safe**: Creates backups before consolidation
-- **Informative**: Provides detailed logging of the process
-
-## 🧪 Testing
-
-Run the test suite:
-
-```powershell
-poetry run pytest
-```
+Each new batch is **appended** to the same file.
 
 ## 🏗️ Architecture
 
 ### Components
 
-- **`main.py`**: CLI orchestration using Typer - provides commands for produce, stream, demo, and consolidate
-- **`producer.py`**: Module containing Kafka producer logic using [kafka-python](https://github.com/dpkp/kafka-python)
-- **`streaming.py`**: Module containing PySpark Structured Streaming logic for aggregations and file consolidation
+- **`main.py`**: CLI orchestration using Typer (commands: produce, stream, demo)
+- **`producer.py`**: Kafka producer logic using [kafka-python](https://github.com/dpkp/kafka-python)
+- **`streaming.py`**: PySpark streaming + CSV aggregation logic
 
 ### Data Flow
 
 ```bash
-Random Events → Kafka → PySpark Streaming → Aggregated Results
-     ↓              ↓           ↓                ↓
-main.py        kafka-python  main.py         CSV/Delta
+Random Events → Kafka → PySpark Streaming → Aggregated Results (CSV)
 ```
 
 ### Technologies
 
-- **[kafka-python](https://github.com/dpkp/kafka-python)**: Simple Kafka client for Python
+- **[kafka-python](https://github.com/dpkp/kafka-python)**: Kafka client for Python
 - **PySpark**: Distributed computing and streaming
 - **Typer**: Modern CLI framework
 - **Poetry**: Dependency management
@@ -157,16 +130,16 @@ main.py        kafka-python  main.py         CSV/Delta
 This project demonstrates:
 
 - **Real-time Streaming**: End-to-end streaming pipeline from event production to analytics
-- **Kafka Integration**: Using [kafka-python](https://github.com/dpkp/kafka-python) for simple, reliable messaging
-- **PySpark Structured Streaming**: Windowed aggregations and real-time processing
-- **Music Analytics**: Genre-based play count analysis (common in music streaming services)
-- **Modern Python**: Poetry, Typer, type hints, and proper packaging
+- **Kafka Integration**: Producing and consuming messages
+- **PySpark**: Windowed aggregations and batch processing
+- **Music Analytics**: Genre-based play count analysis
+- **Modern Python**: Poetry, Typer, type hints, logging
 
 ## 🔧 Development
 
 ### Project Setup
 
-```powershell
+```bash
 # Install dependencies
 poetry install
 
@@ -179,13 +152,6 @@ poetry run black src/ tests/
 # Lint code
 poetry run ruff check src/ tests/
 ```
-
-### Adding New Features
-
-1. **New Producer Logic**: Add functions to `src/tunetracker/producer.py`
-2. **New Streaming Logic**: Add functions to `src/tunetracker/streaming.py`
-3. **New CLI Commands**: Add commands to `src/tunetracker/main.py` (the only CLI entry point)
-4. **Tests**: Add corresponding tests in `tests/`
 
 ## 📝 License
 
