@@ -1,0 +1,13 @@
+FROM bitnami/spark:latest
+
+# Set working dir
+WORKDIR /app
+
+# Copy project code
+COPY ./src /app/src
+
+# Set PYTHONPATH so we can import tunetracker
+ENV PYTHONPATH=/app/src
+
+# Default command runs the analysis
+CMD ["spark-submit", "/app/src/tunetracker/analyze.py"]

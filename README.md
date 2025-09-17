@@ -5,7 +5,7 @@ A simple real-time streaming analytics project for music play events, using [kaf
 ## Authors
 
 | Name     | Surname    | Student Index |
-|----------|------------|---------------|
+| -------- | ---------- | ------------- |
 | Dawid    | Mielewczyk | 189637        |
 | Wojciech | Szamocki   | 188909        |
 
@@ -151,7 +151,26 @@ poetry run black src/ tests/
 
 # Lint code
 poetry run ruff check src/ tests/
+
+## 📊 Analyzing Results
+
+After running the demo (which produces aggregated counts in `demo_output/results.csv`), you can analyze the most popular music genres using Spark.
+
+We provide a dedicated Docker image (`tunetracker-analyze`) that runs the analysis script.
+
+### Build the analysis image
+
+```bash
+docker build -f Dockerfile.analyze -t tunetracker-analyze .
+````
+
+### Run the analysis
+
+```bash
+docker run --rm -v "$(pwd)/demo_output:/app/demo_output" tunetracker-analyze
 ```
+
+The `src\tunetracker\analyze.py` can be modified in order to get more details, for now it groups data from the whole period by genre and shows results with top play counts.
 
 ## 📝 License
 
